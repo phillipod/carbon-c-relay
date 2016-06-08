@@ -2632,12 +2632,15 @@ router_rewrite_metric(
 {
 	char escape = 0;
 	int ref = 0;
+	int i = 0;
+	int snmp_string_size = 0;
+	char snmp_byte = 0;
+	char snmp_sep = '-';
 	char *s = *newmetric;
 	const char *p;
 	const char *q;
 	const char *t;
-	enum rewrite_case { RETAIN, LOWER, UPPER } rcase = RETAIN;
-
+	enum rewrite_type { RETAIN, LOWER, UPPER, SNMP_INDEX } rtype = RETAIN;
 	assert(pmatch != NULL);
 
 	/* insert leading part */
@@ -2655,15 +2658,19 @@ router_rewrite_metric(
 			case '\\':
 				if (!escape) {
 					escape = 1;
-					rcase = RETAIN;
+					rtype = RETAIN;
 					break;
 				}
 				/* fall through so we handle \1\2 */
 			default:
-				if (escape == 1 && rcase == RETAIN && *p == '_') {
-					rcase = LOWER;
-				} else if (escape == 1 && rcase == RETAIN && *p == '^') {
-					rcase = UPPER;
+				if (escape == 1 && rtype == RETAIN && *p == '_') {
+					rtype = LOWER;
+				} else if (escape == 1 && rtype == RETAIN && *p == '^') {
+					rtype = UPPER;
+				} else if (escape == 1 && rtype == RETAIN && *p == 'S') {
+					rtype = SNMP_INDEX;
+				} else if (escape == 1 && rtype == SNMP_INDEX && (*p == '-' || *p == '_' || *p == '.' || *p == '/' || *p == '\\')) {
+					snmp_sep = *p;
 				} else if (escape && *p >= '0' && *p <= '9') {
 					escape = 2;
 					ref *= 10;
@@ -2677,7 +2684,7 @@ router_rewrite_metric(
 							q = metric + pmatch[ref].rm_so;
 							t = metric + pmatch[ref].rm_eo;
 							if (s - *newmetric + t - q < sizeof(*newmetric)) {
-								switch (rcase) {
+								switch (rtype) {
 									case RETAIN:
 										while (q < t)
 											*s++ = *q++;
@@ -2690,6 +2697,33 @@ router_rewrite_metric(
 										while (q < t)
 											*s++ = (char)toupper(*q++);
 										break;
+
+									case SNMP_INDEX:
+										while (q < t) {
+											if (sscanf(q, "%d.", &snmp_string_size)<=0)
+												break;
+											
+											for (i = 1; i <= snmp_string_size; i++) {
+												while(*q != '.' && *q != 0) *q++;
+												*q++;
+
+												if (sscanf(q, "%hhd.", &snmp_byte)<=0)
+													break;
+												
+												*s++ = snmp_byte;
+											}										
+											
+
+											while(*q != '.' && *q != 0) *q++;
+											
+											if (q < t) {
+												*s++ = snmp_sep;
+												*q++;
+											}
+										}
+
+										break;
+										
 								}
 							}
 						}
@@ -2697,7 +2731,7 @@ router_rewrite_metric(
 					}
 					if (*p != '\\') { /* \1\2 case */
 						escape = 0;
-						rcase = RETAIN;
+						rtype = RETAIN;
 						if (s - *newmetric + 1 < sizeof(*newmetric))
 							*s++ = *p;
 					}
